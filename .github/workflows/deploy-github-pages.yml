@@ -1,0 +1,83 @@
+name: Update rankings and deploy GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: racelive-ranking-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Restore RaceLive PDF cache
+        uses: actions/cache@v4
+        with:
+          path: .race-cache
+          key: racelive-pdf-${{ github.run_id }}
+          restore-keys: |
+            racelive-pdf-
+
+      - name: Install PDF text tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      - name: Recalculate rankings from RaceLive
+        env:
+          RACELIVE_CACHE_DIR: .race-cache
+        run: python3 scripts/fetch_rankings.py
+
+      - name: Save updated ranking data
+        run: |
+          if git diff --quiet -- app/rankings.json; then
+            echo "No ranking changes"
+          else
+            git config user.name "RaceLive Ranking Bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add app/rankings.json
+            git commit -m "Update RaceLive rankings"
+            git push
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build GitHub Pages site
+        run: npm run build:github
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: github-pages-dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
